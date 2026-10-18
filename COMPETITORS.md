@@ -18,7 +18,7 @@
 | superwhisper ✔(免费档) | 免费档 "Unlimited use of Whisper models"；Pro $8.49/月；终身约 $250 | 本地 + 云 | 否 | 隐私政策："We do not collect any usage data" | — | 100+ 种语言 | ✔ 收入 "in the seven-figures"，无外部融资（Globe and Mail 2026-05-12） |
 | MacWhisper | 免费；Pro €64 一次性买断 | 本地 | 否 | — | — | 100 种语言（没点名中文） | 主打文件转写 |
 | Spokenly | 本地免费；Local+ $29；Pro $99.99/年 | **默认云**，可选本地 | 否 | 匿名使用统计（Local Only 模式可关） | app 33.6 MB | 界面支持中文 | |
-| Sotto | $49 一次性买断 | 本地默认 | 否 | **网站没有隐私政策页** | 66 MB–2.7 GB | 未点名中文 | |
+| Sotto | $49 一次性买断 | 本地默认 | 否 | **常见路径找不到隐私政策**（/privacy、/privacy-policy、/legal/privacy 都返回 Page not found，10-18 复查） | 66 MB–2.7 GB | 未点名中文 | |
 | BetterDictation | $39 起终身授权 | 基础版本地，Pro 走云 | 否 | 隐私政策承认收集基础遥测 | — | 支持中文 | |
 | Wispr Flow ✔(估值) | 免费档；Pro $12–15/月 | **云**（"Transcription always happens in the cloud"） | 否 | 会读取你正在输入的 app 里的文字（可关） | — | — | 2026-08 估值 $20 亿（Wikipedia 引 Reuters） |
 | Typeless | 免费档限字数；Pro $12/月（年付）或 $30/月（月付） | 云 | 否 | — | — | **中英混说口碑最好**（V2EX 用户） | |
