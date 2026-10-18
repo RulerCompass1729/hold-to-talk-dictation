@@ -22,7 +22,20 @@
 |---|---|
 | [init.lua](init.lua) | 整个工具，放到 `~/.hammerspoon/init.lua`；第 19 行要改成自己真麦的名字 |
 | [INSTALL.md](INSTALL.md) | 分步安装指南，写给 Claude Code 照着做：带验证命令、完成判据、已知坑 |
-| [COMPETITORS.md](COMPETITORS.md) | 20 个竞品对照、本项目的区别、为什么没做成产品 |
+| [COMPETITORS.md](COMPETITORS.md) | 24 个竞品分 5 类逐个说明、本项目的区别、为什么没做成产品 |
+
+## 竞品速览（as-of 2026-10-17，详情见 [COMPETITORS.md](COMPETITORS.md)）
+
+| 类别 | 代表 | 和本项目的关系 |
+|---|---|---|
+| 免费开源、本地运行 | Handy（34k★）、Ghost Pepper、OpenWhispr、VoiceInk、FluidVoice | 同样免费、本地，还多了界面；本项目的「本地 + 干净」已被它们免费做到 |
+| 独立开发者的付费 app | superwhisper、MacWhisper、Spokenly、Sotto、BetterDictation、Whisper Notes | superwhisper 免费档就含本地 whisper 不限量；收费卖的是打磨、云端功能和企业合规 |
+| 云端 + AI 润色 | Wispr Flow（估值 $20 亿）、Typeless、Willow、Aqua Voice | 准确率和润色更强，但语音全部上云 |
+| 中文输入法与中文工具 | 微信输入法、豆包输入法、闪电说、CapsWriter-Offline | 微信输入法免费支持中英混说（云端）；中文开源本地的 CapsWriter 不支持 Mac |
+| 系统和大厂免费提供 | macOS 自带听写、Apple SpeechAnalyzer、Google Eloquent | 本地识别已是免费的基础设施；但不能按住说话、不能中英混说 |
+
+**本项目剩下的特点**：一个约 360 行的文件就是全部；外连情况实测过；按住右 Cmd 说话；中英混说靠 whisper 自动识别语种。
+**本项目缺的**：图形界面、AI 润色、自定义词表、中文专用引擎。
 
 ## 隐私核对（参考机器实测）
 
