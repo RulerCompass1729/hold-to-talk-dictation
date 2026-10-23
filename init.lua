@@ -35,6 +35,10 @@ local PUNCT_SCRIPT = hs.configdir .. "/punct.py"
 local PUNCT_MODEL  = HOME .. "/.local/whisper-dictation/models/punct-ct-transformer-zh-en-int8/model.int8.onnx"
 local PUNCT_TIMEOUT_SECS = 3
 
+-- 录到的音频短于这个就不转写（误触 / 秒松）：实测 0.26 秒的「对」被幻觉成一句越南语，0.34 秒的「好」能认对
+local MIN_AUDIO_SECS  = 0.3
+local MIN_AUDIO_BYTES = 44 + 16000 * 2 * MIN_AUDIO_SECS   -- wav 头 44 字节 + 16kHz 单声道 16-bit
+
 -- ----------------------------------------------------------------------------
 -- 状态
 -- ----------------------------------------------------------------------------
@@ -44,6 +48,9 @@ local serverPid      = nil   -- whisper-server 的 PID（nil=没在跑）
 local recGen         = 0     -- 录音代数，防旧 sox 回调 clobber 新录音状态
 local releasePoller  = nil   -- 松开轮询 timer（被 startPoller/stopRecording 闭包持有，不会 GC）
 local punctTask      = nil   -- 正在跑的 punct.py（hs.task），存起来防 GC
+-- hs.timer 必须有人引用：doAfter 的返回值不存住会被 GC 回收、永远不触发（实测 Hammerspoon 1.1.1）
+local retryTimer     = nil   -- 转写失败后 3s 重试
+local restoreTimer   = nil   -- 粘贴后 0.25s 恢复原剪贴板
 
 -- ⚠️ 必须全局保留（不能用 local）：Hammerspoon 的 eventtap/menubar/drawing 对象若被
 -- Lua GC 回收，监听/菜单栏图标/overlay 会静默失效——这就是「第一次能摁、第二次没反应」的根因。
@@ -163,7 +170,7 @@ local function pasteText(text)
   local prev = hs.pasteboard.getContents()
   hs.pasteboard.setContents(text)
   hs.eventtap.keyStroke({ "cmd" }, "v")
-  hs.timer.doAfter(0.25, function()
+  restoreTimer = hs.timer.doAfter(0.25, function()
     if prev ~= nil then
       hs.pasteboard.setContents(prev)   -- 原剪贴板是文本，恢复
     else
@@ -192,9 +199,11 @@ local function punctuate(text, done)
   end
   local finished = false
   local task
+  local timeoutTimer = nil   -- 被下面的回调引用：task 在跑时 Hammerspoon 留着回调，timer 也就不会被 GC
   task = hs.task.new(PUNCT_PYTHON, function(code, stdout, stderr)
     if finished then return end
     finished = true
+    if timeoutTimer then timeoutTimer:stop() end
     if punctTask == task then punctTask = nil end
     -- punct.py 内部出错也会 exit 0 并输出原文，所以 stderr 有内容就记下来
     if stderr and stderr ~= "" then
@@ -222,7 +231,7 @@ local function punctuate(text, done)
     done(text)
     return
   end
-  hs.timer.doAfter(PUNCT_TIMEOUT_SECS, function()
+  timeoutTimer = hs.timer.doAfter(PUNCT_TIMEOUT_SECS, function()
     if finished then return end
     finished = true
     log("标点处理超时，用原文")
@@ -235,9 +244,10 @@ end
 -- ----------------------------------------------------------------------------
 -- 转写（POST 到本地 whisper-server），带一次失败重试
 -- ----------------------------------------------------------------------------
-local function transcribe(attempt)
+local function transcribe(gen, attempt)
+  gen = gen or recGen
   attempt = attempt or 1
-  log("transcribe attempt=" .. attempt)
+  log("transcribe attempt=" .. attempt .. " gen=" .. gen)
 
   hs.task.new(CURL, function(code, stdout, stderr)
     log("curl exit=" .. tostring(code) .. " out=" .. head(stdout, 120))
@@ -264,7 +274,15 @@ local function transcribe(attempt)
     if attempt == 1 then
       log("失败 → 重启 server + 3s 后重试")
       startServer()
-      hs.timer.doAfter(3.0, function() transcribe(2) end)
+      retryTimer = hs.timer.doAfter(3.0, function()
+        -- 这 3 秒里又开始了新录音：hold_talk.wav 已是新录音，再读会把新录音贴两次
+        if gen ~= recGen then
+          log("放弃 gen=" .. gen .. " 的重试：已有新录音 gen=" .. recGen)
+          hs.alert.show("上一段转写失败，请重说")
+          return
+        end
+        transcribe(gen, 2)
+      end)
     else
       log("重试后仍失败")
       hs.alert.show("转写失败，请检查 whisper 服务，再试一次")
@@ -275,6 +293,16 @@ local function transcribe(attempt)
     "-F", "language=auto",
     SERVER_URL,
   }):start()
+end
+
+-- 录音结束：太短的不送 whisper（sox 没来得及录 → exit 15 没文件；或只录到零点几秒）
+local function afterRecording(gen)
+  local size = hs.fs.attributes(AUDIO_FILE, "size")
+  if not size or size < MIN_AUDIO_BYTES then
+    log("录音太短 size=" .. tostring(size) .. "，不转写")
+    return
+  end
+  transcribe(gen)
 end
 
 -- ----------------------------------------------------------------------------
@@ -347,7 +375,7 @@ local function startRecording()
     isRecording = false
     stopPoller()
     hideRecording()
-    transcribe()
+    afterRecording(gen)
   end, {
     "-t", "coreaudio", INPUT_DEVICE,
     "-r", "16000",
@@ -401,7 +429,8 @@ end)
 hsTalk = {
   startRecording = startRecording,
   stopRecording  = stopRecording,
-  transcribe     = transcribe,
+  transcribe     = transcribe,       -- hsTalk.transcribe(gen, attempt)：不给 gen 就用当前 recGen
+  afterRecording = afterRecording,   -- 只看录音够不够长：太短的只记日志不转写
   pasteText      = pasteText,
   punctuate      = punctuate,   -- 只处理文字不粘贴：hs -c 'hsTalk.punctuate("能放草果吗", function(r) punctOut = r end)'
   startServer    = startServer,
@@ -414,7 +443,7 @@ hsTalk = {
     startRecording()
     -- 程序化测试没有物理按键，poller 会立刻「检测到松开」秒停录音——手动停掉 poller
     if releasePoller then releasePoller:stop(); releasePoller = nil end
-    hs.timer.doAfter(2.0, function() stopRecording() end)
+    hsTalk.testTimer = hs.timer.doAfter(2.0, function() stopRecording() end)
     return "test: 录 2 秒后自动停止（已跳过 poller）"
   end,
   readlog = function()
@@ -430,7 +459,7 @@ hsTalk = {
 -- 启动
 -- ----------------------------------------------------------------------------
 hs.execute("/usr/bin/pkill -f whisper-server 2>/dev/null")
-hs.timer.doAfter(0.5, startServer)
+serverStartTimer = hs.timer.doAfter(0.5, startServer)   -- 全局：本文件跑完后没有函数引用它，local 会被 GC
 
 if not cmdTap then
   hs.alert.show("Hammerspoon 缺辅助功能权限，按键监听没生效：\n"

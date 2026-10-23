@@ -1,6 +1,6 @@
 # 按住说话（hold-to-talk）安装指南 · 给 Claude 照做
 
-> as-of 2026-10-17（2026-10-21 加了可选的中文标点后处理，第 5b 步）。参考机器 = Apple Silicon Mac（arm64, macOS 26），在那台上已跑通并做过隐私审计（录音/转写不出本机）。
+> as-of 2026-10-17（2026-10-21 加了可选的中文标点后处理，第 5b 步；10-23 修了按得太短、重试读错录音、timer 被垃圾回收三个问题）。参考机器 = Apple Silicon Mac（arm64, macOS 26），在那台上已跑通并做过隐私审计（录音/转写不出本机）。
 > 本仓库里与安装有关的文件：`INSTALL.md`（本文）+ `init.lua`（参考机器 `~/.hammerspoon/init.lua` 的副本，只把第 19 行麦克风名换成了占位符 `YOUR_MIC_NAME`）+ `punct.py`（中文标点后处理，可选）+ `test_punct.py`（它的检查）。
 
 ## 它是什么
@@ -23,7 +23,7 @@
 5. 校验本目录的 init.lua 和 punct.py 没被改过：
    ```bash
    shasum -a 256 init.lua punct.py
-   # 期望 init.lua  b3047e08d702402c059c864e96d176e554fd5a3ddf288cff9f929d057401fa37
+   # 期望 init.lua  9a975a1f8b11a526347a569e8356f4c1c55b8a7b3837ebf4e87d6e2599a24fee
    #      punct.py  5f19b1df0c387d4f6062829ef5afef6be52df39aaf2557bf9e9614b8bc5a1efe
    ```
    对不上就停下问用户。
@@ -51,7 +51,7 @@ pgrep -fl whisper-server
 
 - 已有 `~/.hammerspoon/init.lua`：先备份成 `~/.hammerspoon/init.lua.bak-$(date +%Y%m%d-%H%M%S)`，再告诉用户。它原有的功能会被替换，要合并的话先问。
 - 8942 端口被别的程序占着：问用户，或者同时改 init.lua 第 18 行的 `SERVER_PORT`。
-- 注意 init.lua 第 432 行会 `pkill -f whisper-server`，**这台机器上别的 whisper-server 也会被杀掉**。如果有，先告诉用户。它按整条命令行匹配：Reload 时，命令行里带 `whisper-server` 字样的 shell 命令（例如把 `hs -c 'hs.reload()'` 和 `pgrep -fl whisper-server` 写在同一条里）也会被一起杀掉，所以 reload 和查进程要分两条命令跑。
+- 注意 init.lua 第 461 行会 `pkill -f whisper-server`，**这台机器上别的 whisper-server 也会被杀掉**。如果有，先告诉用户。它按整条命令行匹配：Reload 时，命令行里带 `whisper-server` 字样的 shell 命令（例如把 `hs -c 'hs.reload()'` 和 `pgrep -fl whisper-server` 写在同一条里）也会被一起杀掉，所以 reload 和查进程要分两条命令跑。
 
 ## 第 3 步 · 装 sox + whisper.cpp
 
@@ -62,7 +62,7 @@ which sox whisper-server           # 都应该在 $BREW/bin/ 下
 whisper-server --help 2>&1 | grep -E -- '-m |-l |-nt|--host|--port'
 ```
 
-参考机器装的是 1.9.2，新装会更新（10-17 时 stable 是 1.9.5）。必须确认 `-m`、`-l`、`-nt`、`--host`、`--port` 五个参数都还在；有改名的话，同步改 init.lua 第 137–143 行。
+参考机器装的是 1.9.2，新装会更新（10-17 时 stable 是 1.9.5）。必须确认 `-m`、`-l`、`-nt`、`--host`、`--port` 五个参数都还在；有改名的话，同步改 init.lua 第 144–150 行。
 
 ## 第 4 步 · 装 Hammerspoon（**首次启动前**先关崩溃上报）
 
@@ -115,7 +115,7 @@ whisper large-v3-turbo 转中文时经常一个标点都不出（参考机器上
 
 模型只能**插入**标点：原文任何字符被它改动，整句放弃、用原文。参考机器上单句多花约 0.15 秒。跳过这一步也行，init.lua 发现文件不在就自动跳过，行为和以前一样。
 
-为什么不用 whisper 的 prompt：10-21 实测，固定中文 prompt 会让英文语音被翻成中文，静音被幻觉成「字幕志愿者 ×××」；beam search、时间戳模式都不改变中文标点。
+为什么不用 whisper 的 prompt：10-21 实测，固定中文 prompt 会让英文语音被翻成中文，静音被幻觉成「字幕志愿者 ×××」；beam search、时间戳模式都不改变中文标点。10-23 又测了英文专有名词 prompt（`Claude Code, Hammerspoon`）：whisper 输出的标点几乎全被去掉，TTS 念的「Claude Code」反而从对变错，只有 Hammerspoon 的拼写变对，所以也没加。
 
 ```bash
 python3 --version     # 需要 3.9+；没有的话 macOS 会提示装 Command Line Tools，先问用户
@@ -292,9 +292,10 @@ nm -u "$L"/*.dylib "$L"/*.so 2>/dev/null | grep -E '_connect$|_getaddrinfo$|_NSU
 
 ## 已知坑（参考机器踩过）
 
-- **全局变量不能改成 local**：eventtap、menubar、drawing 对象如果用 local 声明，会被 Lua 垃圾回收，监听/图标/红条静默失效，表现为「第一次能用，第二次没反应」。init.lua 第 48–52 行已注释，别「优化」成 local。8b 的 `micTestTask` 也是同一个原因。
-- **松开检测**：macOS 上 `flagsChanged` 的松开事件不可靠，代码用 100ms 轮询 `checkKeyboardModifiers()` 兜底。所以用 `hs -c 'hsTalk.startRecording()'` 程序化开录会被立刻停掉（录出空文件，whisper 报 `Invalid request`），这不是 bug。
+- **全局变量不能改成 local**：eventtap、menubar、drawing 对象如果用 local 声明，会被 Lua 垃圾回收，监听/图标/红条静默失效，表现为「第一次能用，第二次没反应」。init.lua 第 55–59 行已注释，别「优化」成 local。8b 的 `micTestTask` 也是同一个原因。`hs.timer.doAfter` 同理：返回值不存住，垃圾回收后 timer 永远不触发（重试、标点超时、恢复剪贴板都会静默失效），所以代码里每个 timer 都存在变量里。
+- **松开检测**：macOS 上 `flagsChanged` 的松开事件不可靠，代码用 100ms 轮询 `checkKeyboardModifiers()` 兜底。所以用 `hs -c 'hsTalk.startRecording()'` 程序化开录会被立刻停掉（录出空文件，debug.log 记「录音太短，不转写」），这不是 bug。
+- **按得太短不转写**：按下后 sox 约 0.3 秒才开始录，录到的音频不到 0.3 秒（大约按 0.6 秒以内）就直接丢掉，只在 debug.log 记「录音太短」，不弹提示（右 Cmd 当快捷键用时也会触发录音）。门槛的依据：实测 0.26 秒的「对」被 whisper 幻觉成一句越南语，0.34 秒的「好」能认对。注意它只挡住太短的录音：0.6–2 秒的静音 whisper 仍会幻觉出 "Thank you." 并贴出来，这个没解决。
 - **识别全错或总出 "Thank you."**：先查录音设备是不是真麦（第 6 步），不要先怀疑模型。
-- **`hs -c` 的输出**开头会混入 `-- Loading extension` 之类的行，要先过滤掉再判断。
+- **`hs -c` 的输出**开头会混入 `-- Loading extension` 之类的行，要先过滤掉再判断。Reload 后第一次在 `hs -c` 里用到还没加载的扩展（例如 `hsTalk.startRecording()` 要用 menubar/drawing），扩展懒加载时打印的这行可能让这次调用报 `ipc port is no longer valid` 并中途停下；先单独跑一句 `hs -c 'local a = hs.menubar; local b = hs.drawing; local c = hs.screen'` 预加载。
 - **本地残留**（不上传，用户应该知道）：最后一次录音 `~/.local/whisper-dictation/audio/hold_talk.wav` 要等下次按键才会被覆盖；`debug.log` 里有每条转写的前 80 字明文，Reload Config 时清空。
 - **`hs.ipc` 的本地风险**：本机任何以该用户身份运行的程序都能用 `hs -c` 让 Hammerspoon 执行代码，而 Hammerspoon 有麦克风和辅助功能权限。参考机器保留了这个功能用来调试；要不要在新机器上去掉第 11 行，由用户决定。
