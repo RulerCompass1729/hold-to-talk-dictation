@@ -10,10 +10,12 @@
 按住右 Cmd ──> Hammerspoon 监听（keyCode 54）
           ──> sox 从指定麦克风录 16kHz 单声道 wav
 松开      ──> curl POST 到本机 whisper-server（127.0.0.1:8942，模型 ggml-large-v3-turbo）
+          ──>（可选）punct.py 给中文补标点：本地标点模型，只插标点、不改字
           ──> 结果写剪贴板 ──> Cmd+V ──> 0.25 秒后恢复原剪贴板
 ```
 
 - 依赖：Hammerspoon、sox、whisper.cpp（都用 Homebrew 装），外加约 1.6 GB 的 whisper 模型。
+- 可选：中文标点后处理，要 Python 3.9+、`sherpa-onnx`、约 75 MB 的标点模型（INSTALL.md 第 5b 步）。不装就跳过。
 - 需要的系统权限：辅助功能、麦克风。
 
 ## 文件
@@ -21,6 +23,7 @@
 | 文件 | 内容 |
 |---|---|
 | [init.lua](init.lua) | 整个工具，放到 `~/.hammerspoon/init.lua`；第 19 行要改成自己真麦的名字 |
+| [punct.py](punct.py) | 中文标点后处理（可选），和 init.lua 一起放进 `~/.hammerspoon/`；[test_punct.py](test_punct.py) 是它的检查 |
 | [INSTALL.md](INSTALL.md) | 分步安装指南，写给 Claude Code 照着做：带验证命令、完成判据、已知坑 |
 | [COMPETITORS.md](COMPETITORS.md) | 24 个竞品分 5 类逐个说明、本项目的区别、为什么没做成产品 |
 
@@ -34,7 +37,7 @@
 | 中文输入法与中文工具 | 微信输入法、豆包输入法、闪电说、CapsWriter-Offline | 微信输入法免费支持中英混说（云端）；中文开源本地的 CapsWriter 不支持 Mac |
 | 系统和大厂免费提供 | macOS 自带听写、Apple SpeechAnalyzer、Google Eloquent | 本地识别已是免费的基础设施；但不能按住说话、不能中英混说 |
 
-**本项目剩下的特点**：一个约 360 行的文件就是全部；外连情况实测过；按住右 Cmd 说话；中英混说靠 whisper 自动识别语种。
+**本项目剩下的特点**：一个约 440 行的 init.lua 就是主体（中文标点是另一个可选的小脚本）；外连情况实测过；按住右 Cmd 说话；中英混说靠 whisper 自动识别语种。
 **本项目缺的**：图形界面、AI 润色、自定义词表、中文专用引擎。
 
 ## 隐私核对（参考机器实测）

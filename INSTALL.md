@@ -1,13 +1,13 @@
 # 按住说话（hold-to-talk）安装指南 · 给 Claude 照做
 
-> as-of 2026-10-17。参考机器 = Apple Silicon Mac（arm64, macOS 26），在那台上已跑通并做过隐私审计（录音/转写不出本机）。
-> 本仓库里与安装有关的两份文件：`INSTALL.md`（本文）+ `init.lua`（参考机器 `~/.hammerspoon/init.lua` 的副本，只把第 19 行麦克风名换成了占位符 `YOUR_MIC_NAME`）。
+> as-of 2026-10-17（2026-10-21 加了可选的中文标点后处理，第 5b 步）。参考机器 = Apple Silicon Mac（arm64, macOS 26），在那台上已跑通并做过隐私审计（录音/转写不出本机）。
+> 本仓库里与安装有关的文件：`INSTALL.md`（本文）+ `init.lua`（参考机器 `~/.hammerspoon/init.lua` 的副本，只把第 19 行麦克风名换成了占位符 `YOUR_MIC_NAME`）+ `punct.py`（中文标点后处理，可选）+ `test_punct.py`（它的检查）。
 
 ## 它是什么
 
 按住**右 Cmd** 说话 → 松开 → 本地 whisper 转写 → 文字贴到当前光标。全本地，不联网。
 
-链路：Hammerspoon 监听右 Cmd（keyCode 54）→ `sox` 从指定麦克风录 16kHz 单声道 wav → `curl` POST 到本机 `whisper-server`（`127.0.0.1:8942`，模型 `ggml-large-v3-turbo.bin`）→ 结果写剪贴板 → Cmd+V → 0.25s 后恢复原剪贴板。
+链路：Hammerspoon 监听右 Cmd（keyCode 54）→ `sox` 从指定麦克风录 16kHz 单声道 wav → `curl` POST 到本机 `whisper-server`（`127.0.0.1:8942`，模型 `ggml-large-v3-turbo.bin`）→（装了第 5b 步时）`punct.py` 给中文补标点 → 结果写剪贴板 → Cmd+V → 0.25s 后恢复原剪贴板。
 
 ## 开工前（Claude 必读）
 
@@ -20,10 +20,11 @@
    - 最后真按右 Cmd 说一句话
 3. **桌面窗口**：打开 TextEdit 或其他窗口之前先问用户；绝不关用户已有的窗口。
 4. **`hsTalk.test()` 不要随便跑**：它会把转写结果直接粘贴进当前焦点窗口。
-5. 校验本目录的 init.lua 没被改过：
+5. 校验本目录的 init.lua 和 punct.py 没被改过：
    ```bash
-   shasum -a 256 init.lua
-   # 期望 f894874463c634093c1c38e0598b17405196185fcce0ed9ef9604b925633f3c9
+   shasum -a 256 init.lua punct.py
+   # 期望 init.lua  b3047e08d702402c059c864e96d176e554fd5a3ddf288cff9f929d057401fa37
+   #      punct.py  5f19b1df0c387d4f6062829ef5afef6be52df39aaf2557bf9e9614b8bc5a1efe
    ```
    对不上就停下问用户。
 
@@ -50,7 +51,7 @@ pgrep -fl whisper-server
 
 - 已有 `~/.hammerspoon/init.lua`：先备份成 `~/.hammerspoon/init.lua.bak-$(date +%Y%m%d-%H%M%S)`，再告诉用户。它原有的功能会被替换，要合并的话先问。
 - 8942 端口被别的程序占着：问用户，或者同时改 init.lua 第 18 行的 `SERVER_PORT`。
-- 注意 init.lua 第 350 行会 `pkill -f whisper-server`，**这台机器上别的 whisper-server 也会被杀掉**。如果有，先告诉用户。
+- 注意 init.lua 第 432 行会 `pkill -f whisper-server`，**这台机器上别的 whisper-server 也会被杀掉**。如果有，先告诉用户。它按整条命令行匹配：Reload 时，命令行里带 `whisper-server` 字样的 shell 命令（例如把 `hs -c 'hs.reload()'` 和 `pgrep -fl whisper-server` 写在同一条里）也会被一起杀掉，所以 reload 和查进程要分两条命令跑。
 
 ## 第 3 步 · 装 sox + whisper.cpp
 
@@ -61,7 +62,7 @@ which sox whisper-server           # 都应该在 $BREW/bin/ 下
 whisper-server --help 2>&1 | grep -E -- '-m |-l |-nt|--host|--port'
 ```
 
-参考机器装的是 1.9.2，新装会更新（10-17 时 stable 是 1.9.5）。必须确认 `-m`、`-l`、`-nt`、`--host`、`--port` 五个参数都还在；有改名的话，同步改 init.lua 第 117–123 行。
+参考机器装的是 1.9.2，新装会更新（10-17 时 stable 是 1.9.5）。必须确认 `-m`、`-l`、`-nt`、`--host`、`--port` 五个参数都还在；有改名的话，同步改 init.lua 第 137–143 行。
 
 ## 第 4 步 · 装 Hammerspoon（**首次启动前**先关崩溃上报）
 
@@ -104,6 +105,46 @@ scp <user>@<已装好的那台 Mac>:.local/whisper-dictation/models/ggml-large-v
 
 不管从哪来，sha256 对不上就不许用。
 
+## 第 5b 步 · 中文标点模型（可选，推荐）
+
+whisper large-v3-turbo 转中文时经常一个标点都不出（参考机器上的真实转写：「我今天想吃西瓜你看一下现在几点了」），出了也常是半角逗号。`punct.py` 在转写之后处理：
+
+- 没有中文 → 原样输出（英文 whisper 自己会加标点）
+- 有中文 → 本地 CT-Transformer 标点模型（sherpa-onnx，int8，约 75MB）把缺的 ，。？ 补上；whisper 已经加了的保留，不在旁边重复加
+- 最后把中文旁边的半角 `,?!;:.` 换成全角；`3.5`、`3:30`、`1,000`、`example.com` 里的符号不动
+
+模型只能**插入**标点：原文任何字符被它改动，整句放弃、用原文。参考机器上单句多花约 0.15 秒。跳过这一步也行，init.lua 发现文件不在就自动跳过，行为和以前一样。
+
+为什么不用 whisper 的 prompt：10-21 实测，固定中文 prompt 会让英文语音被翻成中文，静音被幻觉成「字幕志愿者 ×××」；beam search、时间戳模式都不改变中文标点。
+
+```bash
+python3 --version     # 需要 3.9+；没有的话 macOS 会提示装 Command Line Tools，先问用户
+python3 -m venv ~/.local/whisper-dictation/punct-venv
+~/.local/whisper-dictation/punct-venv/bin/pip install "sherpa-onnx==1.13.8"
+
+T=$(mktemp -d)
+curl -L --fail -o "$T/punct.tar.bz2" \
+  https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2
+shasum -a 256 "$T/punct.tar.bz2"
+# 期望 c0d5aa5f8eeb686032345e180bedf39319dc2e0556781c6264bcadba8328a6e1（与该 release 的 checksum.txt 一致，10-21 核过）
+tar xjf "$T/punct.tar.bz2" -C "$T"
+mkdir -p ~/.local/whisper-dictation/models/punct-ct-transformer-zh-en-int8
+cp "$T"/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8/model.int8.onnx \
+   ~/.local/whisper-dictation/models/punct-ct-transformer-zh-en-int8/
+shasum -a 256 ~/.local/whisper-dictation/models/punct-ct-transformer-zh-en-int8/model.int8.onnx
+# 期望 65a3fb9f5ad7bfb96bf69e0dc4481df97f6ee60513c1d94ce981ba6effd524b1
+```
+
+GitHub 连不上时，同第 5 步：从已装好的 Mac 用 scp 拷 `model.int8.onnx`，sha256 对上才用。
+
+不经过 Hammerspoon 先测一遍：
+
+```bash
+~/.local/whisper-dictation/punct-venv/bin/python -I test_punct.py \
+  ~/.local/whisper-dictation/models/punct-ct-transformer-zh-en-int8/model.int8.onnx
+# 期望最后一行：33 cases, 0 failures
+```
+
 ## 第 6 步 · 选麦克风（最容易出错的一步）
 
 **绝不用系统默认输入（sox 的 `-d`）**。默认输入会漂：参考机器上它先后漂到过「AirPods - Find My」（AirPods 在找设备模式，录到的是数字静音）和「Background Music」（虚拟设备），结果录到静音，whisper 幻觉出 "Thank you."。
@@ -125,6 +166,7 @@ system_profiler SPAudioDataType | grep -B3 'Input Channels' | grep -E '^ {8}[^ ]
 
 ```bash
 cp init.lua ~/.hammerspoon/init.lua            # 已在第 2 步备份过旧文件
+cp punct.py ~/.hammerspoon/punct.py            # 没做第 5b 步也可以放，init.lua 会自动跳过
 # 按第 1 步 / 第 6 步改好第 19 行（Intel 再加第 27–28 行）
 open -a Hammerspoon
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
@@ -208,6 +250,17 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone
 hs -c 'hsTalk.readlog()' 2>&1 | grep -v '^-- Loading' | tail -30
 ```
 
+**8d. 中文标点（装了第 5b 步才做；不碰麦克风、不粘贴）**
+
+```bash
+hs -c 'punctOut = nil; hsTalk.punctuate("能放草果吗", function(r) punctOut = r end); return "ok"' 2>&1 | grep -v '^-- Loading'
+perl -e 'select(undef,undef,undef,1.5)'
+hs -c 'return tostring(punctOut)' 2>&1 | grep -v '^-- Loading'
+# 期望 能放草果吗？（没装第 5b 步时原样返回 能放草果吗）
+```
+
+8c 的日志里，装了第 5b 步时每条会多一行 `标点后=…`。
+
 ## 第 9 步 · 隐私核对
 
 ```bash
@@ -219,6 +272,10 @@ ls ~/Library/Caches/org.hammerspoon.Hammerspoon/io.sentry 2>&1
 # 期望 No such file：Sentry 从没启动过，比参考机器更干净
 nm -u "$(readlink -f "$(which whisper-server)")" | grep -E '_connect$'
 # 期望无输出：whisper-server 没有主动外连的能力
+# 装了第 5b 步时再查标点模型的库：
+L=$(~/.local/whisper-dictation/punct-venv/bin/python -I -c 'import os, sherpa_onnx; print(os.path.dirname(sherpa_onnx.__file__) + "/lib")')
+nm -u "$L"/*.dylib "$L"/*.so 2>/dev/null | grep -E '_connect$|_getaddrinfo$|_NSURLSession'
+# 期望无输出：sherpa-onnx / onnxruntime 没有联网能力（10-21 参考机器核过；联网只发生在 pip 安装和下载模型时）
 ```
 
 ## 完成判据（全勾才算装好，SKIP ≠ PASS）
@@ -228,13 +285,14 @@ nm -u "$(readlink -f "$(which whisper-server)")" | grep -E '_connect$'
 - [ ] 8b：有人说话时 Maximum amplitude ≥ 0.01
 - [ ] 8c：用户真按右 Cmd，中英混合的一句话正确贴进 TextEdit
 - [ ] 第 9 步四项全部符合预期
+- [ ] （装了第 5b 步时）`test_punct.py` 0 failures；8d 返回「能放草果吗？」；第 9 步标点库的 nm 无输出
 - [ ] （先问用户）注销再登录，Hammerspoon 自动起来，`hsTalk.state()` 仍是 alive
 
 最后给用户报一张表：每一项的命令输出或现象，以及改过 init.lua 的哪些行。
 
 ## 已知坑（参考机器踩过）
 
-- **全局变量不能改成 local**：eventtap、menubar、drawing 对象如果用 local 声明，会被 Lua 垃圾回收，监听/图标/红条静默失效，表现为「第一次能用，第二次没反应」。init.lua 第 41–45 行已注释，别「优化」成 local。8b 的 `micTestTask` 也是同一个原因。
+- **全局变量不能改成 local**：eventtap、menubar、drawing 对象如果用 local 声明，会被 Lua 垃圾回收，监听/图标/红条静默失效，表现为「第一次能用，第二次没反应」。init.lua 第 48–52 行已注释，别「优化」成 local。8b 的 `micTestTask` 也是同一个原因。
 - **松开检测**：macOS 上 `flagsChanged` 的松开事件不可靠，代码用 100ms 轮询 `checkKeyboardModifiers()` 兜底。所以用 `hs -c 'hsTalk.startRecording()'` 程序化开录会被立刻停掉（录出空文件，whisper 报 `Invalid request`），这不是 bug。
 - **识别全错或总出 "Thank you."**：先查录音设备是不是真麦（第 6 步），不要先怀疑模型。
 - **`hs -c` 的输出**开头会混入 `-- Loading extension` 之类的行，要先过滤掉再判断。

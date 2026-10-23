@@ -29,6 +29,12 @@ local WHISPER_SERVER = "/opt/homebrew/bin/whisper-server"
 local CURL           = "/usr/bin/curl"
 local SERVER_URL     = "http://127.0.0.1:" .. SERVER_PORT .. "/inference"
 
+-- 中文标点后处理（可选，INSTALL.md 第 5b 步）：下面三个文件都在才启用，缺一个就跳过
+local PUNCT_PYTHON = HOME .. "/.local/whisper-dictation/punct-venv/bin/python"
+local PUNCT_SCRIPT = hs.configdir .. "/punct.py"
+local PUNCT_MODEL  = HOME .. "/.local/whisper-dictation/models/punct-ct-transformer-zh-en-int8/model.int8.onnx"
+local PUNCT_TIMEOUT_SECS = 3
+
 -- ----------------------------------------------------------------------------
 -- 状态
 -- ----------------------------------------------------------------------------
@@ -37,6 +43,7 @@ local isRecording    = false
 local serverPid      = nil   -- whisper-server 的 PID（nil=没在跑）
 local recGen         = 0     -- 录音代数，防旧 sox 回调 clobber 新录音状态
 local releasePoller  = nil   -- 松开轮询 timer（被 startPoller/stopRecording 闭包持有，不会 GC）
+local punctTask      = nil   -- 正在跑的 punct.py（hs.task），存起来防 GC
 
 -- ⚠️ 必须全局保留（不能用 local）：Hammerspoon 的 eventtap/menubar/drawing 对象若被
 -- Lua GC 回收，监听/菜单栏图标/overlay 会静默失效——这就是「第一次能摁、第二次没反应」的根因。
@@ -54,6 +61,19 @@ local function log(msg)
     f:write(os.date("%H:%M:%S") .. " " .. tostring(msg) .. "\n")
     f:close()
   end
+end
+
+-- 取前 n 个字符：按 UTF-8 字符截，按字节截会切坏半个汉字（grep 会把日志当二进制）
+local function head(s, n)
+  s = tostring(s)
+  local ok, cut = pcall(utf8.offset, s, n + 1)   -- 开头是续字节（坏 UTF-8）时 utf8.offset 会抛错
+  if not ok then
+    return s:sub(1, n)
+  end
+  if cut then
+    return s:sub(1, cut - 1)
+  end
+  return s
 end
 
 -- ----------------------------------------------------------------------------
@@ -154,6 +174,65 @@ local function pasteText(text)
 end
 
 -- ----------------------------------------------------------------------------
+-- 中文标点后处理：转写结果经 stdin 交给 punct.py，超时/出错/没装都用原文
+-- ----------------------------------------------------------------------------
+local function fileExists(path)
+  local f = io.open(path, "r")
+  if f then
+    f:close()
+    return true
+  end
+  return false
+end
+
+local function punctuate(text, done)
+  if not (fileExists(PUNCT_PYTHON) and fileExists(PUNCT_SCRIPT) and fileExists(PUNCT_MODEL)) then
+    done(text)
+    return
+  end
+  local finished = false
+  local task
+  task = hs.task.new(PUNCT_PYTHON, function(code, stdout, stderr)
+    if finished then return end
+    finished = true
+    if punctTask == task then punctTask = nil end
+    -- punct.py 内部出错也会 exit 0 并输出原文，所以 stderr 有内容就记下来
+    if stderr and stderr ~= "" then
+      log("标点 stderr=" .. head(stderr, 300))
+    end
+    if code == 0 and stdout and stdout ~= "" then
+      log("标点后=" .. head(stdout, 80))
+      done(stdout)
+    else
+      log("标点处理失败 code=" .. tostring(code))
+      done(text)
+    end
+  end, { "-I", PUNCT_SCRIPT, PUNCT_MODEL })
+  if not task then
+    log("标点处理建不起 task，用原文")
+    done(text)
+    return
+  end
+  task:setInput(text)   -- 非流式 task：start 后写完这段输入会自动关 stdin
+  punctTask = task
+  if not task:start() then
+    finished = true
+    punctTask = nil
+    log("标点处理启动失败，用原文")
+    done(text)
+    return
+  end
+  hs.timer.doAfter(PUNCT_TIMEOUT_SECS, function()
+    if finished then return end
+    finished = true
+    log("标点处理超时，用原文")
+    task:terminate()
+    if punctTask == task then punctTask = nil end
+    done(text)
+  end)
+end
+
+-- ----------------------------------------------------------------------------
 -- 转写（POST 到本地 whisper-server），带一次失败重试
 -- ----------------------------------------------------------------------------
 local function transcribe(attempt)
@@ -161,7 +240,7 @@ local function transcribe(attempt)
   log("transcribe attempt=" .. attempt)
 
   hs.task.new(CURL, function(code, stdout, stderr)
-    log("curl exit=" .. tostring(code) .. " out=" .. tostring(stdout):sub(1, 120))
+    log("curl exit=" .. tostring(code) .. " out=" .. head(stdout, 120))
     local text = nil
     if code == 0 and stdout and stdout ~= "" then
       local ok, data = pcall(hs.json.decode, stdout)
@@ -171,12 +250,14 @@ local function transcribe(attempt)
     end
 
     if text and text ~= "" then
-      log("转写结果=" .. text:sub(1, 80))
-      local pasted = pasteText(text)
-      log("粘贴=" .. tostring(pasted))
-      if not pasted then
-        hs.alert.show("没听清（空转写），再试一次")
-      end
+      log("转写结果=" .. head(text, 80))
+      punctuate(text, function(finalText)
+        local pasted = pasteText(finalText)
+        log("粘贴=" .. tostring(pasted))
+        if not pasted then
+          hs.alert.show("没听清（空转写），再试一次")
+        end
+      end)
       return
     end
 
@@ -322,6 +403,7 @@ hsTalk = {
   stopRecording  = stopRecording,
   transcribe     = transcribe,
   pasteText      = pasteText,
+  punctuate      = punctuate,   -- 只处理文字不粘贴：hs -c 'hsTalk.punctuate("能放草果吗", function(r) punctOut = r end)'
   startServer    = startServer,
   state = function()
     return string.format(
